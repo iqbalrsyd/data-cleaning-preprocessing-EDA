@@ -13,7 +13,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from IPython.display import display
-import warnings
+import glob
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.manifold import TSNE
+from sklearn.linear_model import LassoCV
+from sklearn.ensemble import RandomForestRegressor
 
 ! pip install kaggle
 
@@ -35,14 +40,6 @@ file_directories = []
 for file in os.listdir('/content/e-commerce-data-shein'):
   print('/content/e-commerce-data-shein', file, sep='/')
   file_directories.append(file)
-
-for file in file_directories:
-    if file.endswith('.csv'):
-        file_path = f'/content/{file}'
-        df = pd.read_csv(file_path)
-        display(df.head())
-
-warnings.filterwarnings('ignore')
 
 file_names = []
 category_names = []
@@ -66,8 +63,8 @@ for file in file_names:
     try:
         df = pd.read_csv(file_path)  # Membaca file CSV
         df_name = f'{category}'  # Nama DataFrame sesuai kategori
-        globals()[df_name] = df  # Menyimpan DataFrame dengan nama variabel dinamis
-        df_names.append(df_name)  # Tambahkan nama DataFrame ke list
+        globals()[df_name] = df
+        df_names.append(df_name)
         print(f'Successfully loaded {df_name}')
     except FileNotFoundError:
         print(f'File {file_path} not found. Please check the path or file name.')
@@ -76,31 +73,185 @@ for file in file_names:
     except Exception as e:
         print(f'An error occurred while loading {file_path}: {e}')
 
+categories = [
+    "beauty_and_health", "curve", "sports_and_outdoors", "electronics",
+    "appliances", "shoes", "jewelry_and_accessories", "toys_and_games",
+    "home_textile", "swimwear", "underwear_and_sleepwear",
+    "office_and_school_supplies", "home_and_kitchen", "automotive",
+    "kids", "bags_and_luggage", "mens_clothes", "tools_and_home_improvement",
+    "womens_clothing", "pet_supplies", "baby_and_maternity"
+]
+
+file_paths = glob.glob('/content/e-commerce-data-shein/*.csv')
+
 all_columns = set()
 
-for category in category_names:
-    df_name = f"{category}"
+dataframes = []
 
-    all_columns.update(globals()[df_name].columns)
+for i, file_path in enumerate(file_paths):
+    df = pd.read_csv(file_path)
+
+    df['category'] = categories[i]
+
+    all_columns.update(df.columns)
+
+    dataframes.append(df)
 
 all_columns = list(all_columns)
 
-dfs = [globals()[category].reindex(columns=all_columns) for category in category_names]
-merged_df = pd.concat(dfs, ignore_index=True)
+dfs = [df.reindex(columns=all_columns) for df in dataframes]
 
-display(merged_df)
+df = pd.concat(dfs, ignore_index=True)
 
-merged_df.shape
+display(df)
 
-print(merged_df.isnull().sum())
+df.shape
 
-print(merged_df.isnull().mean() * 100)
+columns_to_drop = ['blackfridaybelts-bg src', 'goods-title-link', 'goods-title-link--jump href', 'goods-title-link--jump', 'product-locatelabels-img src']
+df.drop(columns=columns_to_drop, inplace=True)
 
-merged_df.info()
+print(df.columns)
 
-for column in merged_df.columns:
-    value_counts_df = merged_df[column].value_counts(dropna=False).reset_index()
-    value_counts_df.columns = [column, 'Count']  # Rename columns for clarity
+print(df.isnull().sum())
+
+print(df.isnull().mean() * 100)
+
+df.info()
+
+df = df.dropna(subset=['price'])
+
+for column in df.columns:
+    value_counts_df = df[column].value_counts(dropna=False).reset_index()
+    value_counts_df.columns = [column, 'Count']
     print(f"Value counts for column: {column}")
     display(value_counts_df)
     print("\n")
+
+df['color-count'] = df['color-count'].fillna(0)
+
+df['selling_proposition'] = df['selling_proposition'].replace(r'[\s\+]*sold recently', '', regex=True)
+df['selling_proposition'] = df['selling_proposition'].fillna(0)
+
+df['discount'] = df['discount'].str.replace('-', '').str.replace('%', '')
+
+df['blackfridaybelts-content'] = df['blackfridaybelts-content'].str.extract(r'\$(\d+\.\d+)')
+df['blackfridaybelts-content'] = df['blackfridaybelts-content'].fillna('0')
+
+df['price'] = df['price'].replace('[\$,]', '', regex=True).astype(float).fillna(0)
+df['discount'] = df['discount'].replace(r'%', '', regex=True).astype(float).fillna(0)
+df['rank-sub'] = df['discount'].fillna('0')
+
+df['selling_proposition'] = df['selling_proposition'].fillna('0')
+
+import re
+
+def extract_rank(text):
+    match = re.search(r'#(\d+)', str(text))
+    return int(match.group(1)) if match else 0
+
+df['rank-title'] = df['rank-title'].apply(extract_rank)
+
+def parse_numbers(value):
+    if pd.isna(value):
+        return 0
+    value = str(value).lower().replace(',', '')  # Menangani format koma
+    if 'k' in value:
+        return float(value.replace('k', '')) * 1000
+    elif 'm' in value:
+        return float(value.replace('m', '')) * 1000000
+    else:
+        try:
+            return float(value)
+        except ValueError:
+            return 0
+
+df['selling_proposition'] = df['selling_proposition'].apply(parse_numbers)
+
+display(df.dtypes)
+print(df.isnull().sum())
+display(df)
+
+df['color-count'] = df['color-count'].astype(float)
+df['selling_proposition'] = df['selling_proposition'].astype(float)
+df['blackfridaybelts-content'] = df['blackfridaybelts-content'].astype(float)
+df['rank-title'] = df['rank-title'].astype('category')
+df['rank-sub'] = df['rank-sub'].astype('category')
+df['rank-title'] = df['rank-title'].astype('category')
+df['category'] = df['category'].astype('category')
+
+for column in df.columns:
+    value_counts_df = df[column].value_counts(dropna=False).reset_index()
+    value_counts_df.columns = [column, 'Count']
+    print(f"Value counts for column: {column}")
+    display(value_counts_df)
+    print("\n")
+
+plt.figure(figsize=(12, 10))
+sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt='.2f')
+plt.title('Correlation Matrix')
+plt.show()
+
+# Generate and display the covariance matrix
+covariance_matrix = df[['color-count', 'price', 'discount', 'blackfridaybelts-content']].cov()
+plt.figure(figsize=(12, 10))
+sns.heatmap(covariance_matrix, annot=True, cmap='coolwarm', fmt='.2f')
+plt.title('Covariance Matrix')
+plt.show()
+
+z_scores = np.abs((df[['color-count', 'price', 'discount', 'blackfridaybelts-content']] - df[['color-count', 'price', 'discount', 'blackfridaybelts-content']].mean()) / df[['color-count', 'price', 'discount', 'blackfridaybelts-content']].std())
+df_cleaned = df[(z_scores < 3).all(axis=1)]
+
+print("Data after removing outliers:")
+display(df_cleaned.head())
+
+plt.figure(figsize=(12, 10))
+sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt='.2f')
+plt.title('Correlation Matrix')
+plt.show()
+
+# Generate and display the covariance matrix
+covariance_matrix = df_reduced[['color-count', 'price', 'discount', 'blackfridaybelts-content']].cov()
+plt.figure(figsize=(12, 10))
+sns.heatmap(covariance_matrix, annot=True, cmap='coolwarm', fmt='.2f')
+plt.title('Covariance Matrix')
+plt.show()
+
+
+
+scaler = StandardScaler()
+scaled_data = scaler.fit_transform(df_reduced[['color-count', 'price', 'discount', 'blackfridaybelts-content']])
+
+pca = PCA(n_components=2)  # Reducing to 2 dimensions for visualization
+pca_result = pca.fit_transform(scaled_data)
+
+# Explained variance ratio
+explained_variance = pca.explained_variance_ratio_
+print("Explained variance ratio:", explained_variance)
+
+# PCA components
+components = pca.components_
+print("PCA components:\n", components)
+
+plt.figure(figsize=(10, 8))
+sns.scatterplot(x=pca_result[:, 0], y=pca_result[:, 1], hue=df_cleaned['category'], palette='viridis', alpha=0.7)
+plt.xlabel('Principal Component 1')
+plt.ylabel('Principal Component 2')
+plt.title('PCA Result with Hue by Category')
+plt.legend(title='Category')
+plt.show()
+
+plt.figure(figsize=(10, 8))
+sns.scatterplot(x=pca_result[:, 0], y=pca_result[:, 1], hue=df_cleaned['rank-title'], palette='viridis', alpha=0.7)
+plt.xlabel('Principal Component 1')
+plt.ylabel('Principal Component 2')
+plt.title('PCA Result with Hue by Rank Title')
+plt.legend(title='Rank Title')
+plt.show()
+
+plt.figure(figsize=(10, 8))
+sns.scatterplot(x=pca_result[:, 0], y=pca_result[:, 1], hue=df_cleaned['rank-sub'], palette='viridis', alpha=0.7)
+plt.xlabel('Principal Component 1')
+plt.ylabel('Principal Component 2')
+plt.title('PCA Result with Hue by Rank Sub')
+plt.legend(title='Rank Sub')
+plt.show()
